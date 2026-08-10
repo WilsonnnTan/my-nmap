@@ -1,11 +1,11 @@
 from scapy.all import IP, TCP, ICMP, send, UDP
 from collections import defaultdict
 
-from packet_sender import send_packets
-from nmap_type import PortInfo, TCPFlag
+from .packet_sender import send_packets
+from .nmap_type import PortInfo, TCPFlag
 
 # TCP SYN scan
-def tcp_syn_scan(hosts: list[str], port_count=100) -> dict[str, PortInfo]:
+def tcp_syn_scan(hosts: list[str], port_count=100) -> dict[str, list[PortInfo]]:
     scan_result = defaultdict(list)
     
     # Take top common ports for TCP
@@ -38,7 +38,7 @@ def tcp_syn_scan(hosts: list[str], port_count=100) -> dict[str, PortInfo]:
                         PortInfo(
                             port_number=sent[TCP].dport,
                             protocol="TCP",
-                            state=["closed"]
+                            state="closed"
                         )
                     )
                 # Recieved TCP SYN-ACK flags which mean the port is open
@@ -47,7 +47,7 @@ def tcp_syn_scan(hosts: list[str], port_count=100) -> dict[str, PortInfo]:
                         PortInfo(
                             port_number=sent[TCP].dport,
                             protocol="TCP",
-                            state=["open"]
+                            state="open"
                         )
                     )
 
@@ -62,7 +62,7 @@ def tcp_syn_scan(hosts: list[str], port_count=100) -> dict[str, PortInfo]:
                     PortInfo(
                         port_number=sent[TCP].dport,
                         protocol="TCP",
-                        state=["filtered"]
+                        state="filtered"
                     )
                 )
         
@@ -72,7 +72,7 @@ def tcp_syn_scan(hosts: list[str], port_count=100) -> dict[str, PortInfo]:
                 PortInfo(
                     port_number=sent[TCP].dport,
                     protocol="TCP",
-                    state=["filtered"],
+                    state="filtered",
                 )
             )
                     
@@ -80,7 +80,7 @@ def tcp_syn_scan(hosts: list[str], port_count=100) -> dict[str, PortInfo]:
 
 
 # UDP scan
-def udp_scan(hosts: list[str], port_count=100) -> dict[str, PortInfo]:
+def udp_scan(hosts: list[str], port_count=100) -> dict[str, list[PortInfo]]:
     scan_result = defaultdict(list)
     
     # Take top common ports for UDP
@@ -111,7 +111,7 @@ def udp_scan(hosts: list[str], port_count=100) -> dict[str, PortInfo]:
                     PortInfo(
                         port_number=sent[UDP].dport,
                         protocol="UDP",
-                        state=["open"]
+                        state="open"
                     )
                 )
 
@@ -123,7 +123,7 @@ def udp_scan(hosts: list[str], port_count=100) -> dict[str, PortInfo]:
                         PortInfo(
                             port_number=sent[UDP].dport,
                             protocol="UDP",
-                            state=["filtered"]
+                            state="filtered"
                         )
                     )
                 elif recv[ICMP].code == 3:
@@ -131,7 +131,7 @@ def udp_scan(hosts: list[str], port_count=100) -> dict[str, PortInfo]:
                         PortInfo(
                             port_number=sent[UDP].dport,
                             protocol="UDP",
-                            state=["closed"]
+                            state="closed"
                         )
                     )
 
@@ -141,12 +141,8 @@ def udp_scan(hosts: list[str], port_count=100) -> dict[str, PortInfo]:
                 PortInfo(
                     port_number=sent[UDP].dport,
                     protocol="UDP",
-                    state=["filtered", "open"]
+                    state="open | filtered"
                 )
             )
 
     return dict(scan_result)
-
-
-print(tcp_syn_scan(["103.143.12.117"]))
-print(udp_scan(["103.143.12.117"], 20)) 

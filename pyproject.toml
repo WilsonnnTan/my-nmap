@@ -1,9 +1,11 @@
 [project]
-name = "nmap"
+name = "my_nmap"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "click>=8.4.2",
     "scapy>=2.7.0",
+    "texttable>=1.7.0",
 ]

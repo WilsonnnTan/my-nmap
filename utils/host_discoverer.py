@@ -1,10 +1,11 @@
 from scapy.all import IP, TCP, ICMP, sr, send, Ether, srp, ARP
 import ipaddress
 import time
-from nmap_type import TCPFlag
+from .nmap_type import TCPFlag
+
 
 # Discover live host
-def discover_live_host(network_address: str):
+def discover_live_host(network_address: str) -> list[str]:
     # Convert into IPv4/IPv6 Object
     network = ipaddress.ip_network(network_address, strict=False)
 

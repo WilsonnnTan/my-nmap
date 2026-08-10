@@ -36,18 +36,18 @@ class Port:
 
 @dataclass(eq=False)
 class PortInfo(Port):
-    state: list[Literal["open", "closed", "filtered"]]
+    state: Literal["open", "closed", "filtered", "open | filtered"]
     service: str | None = None
     version: str | None = None
 
     def is_open(self):
-        return "open" in self.state
+        return "open" == self.state
     
     def is_closed(self):
-        return "closed" in self.state
+        return "closed" == self.state
     
     def is_filtered(self):
-        return "filtered" in self.state
+        return "filtered" == self.state
     
     def is_open_filtered(self):
-        return self.is_open() and self.is_filtered()
+        return "open | filtered" == self.state
