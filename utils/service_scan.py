@@ -1,5 +1,5 @@
 from scapy.all import IP, TCP, ICMP, sr, send, UDP, sndrcv, conf, AsyncSniffer
-from nmap_type import Port
+from .nmap_type import Port
 from typing import Literal
 from dataclasses import dataclass, field
 import re
@@ -56,7 +56,9 @@ class ServiceScan:
         self.probes: list[ServiceProbe] = []
         self.probes_tracker = -1     # counter to track self.probes index
         self.parse_probes_database()
-        print(self.probes)
+    
+    def scanner(self):
+        pass
         
     def parse_probes_database(self):
         with open(self.probes_database, "r", encoding="utf-8") as f:
@@ -367,5 +369,3 @@ class ServiceScan:
         match = re.match(r'fallback\s+([\w,\-]+)', line)
         self.probes[self.probes_tracker].fallback = match.group(1).split(",")
 
-
-scanner=ServiceScan()

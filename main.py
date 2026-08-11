@@ -4,6 +4,7 @@ import time
 from utils.host_discoverer import discover_live_host
 from utils.port_scanner import tcp_syn_scan, udp_scan
 from utils.nmap_type import PortInfo
+from utils.service_scan import ServiceScan
 
 
 @click.command()
@@ -15,7 +16,9 @@ def my_nmap(target, sT, sU, top_ports):
     """
     TARGET is the target IP/Network (Hostname not supported)
     """
-    print("Starting network scan")
+    print("Initializing Service Probes Database...")
+    service_scan = ServiceScan()
+    print("Starting network scan...")
     start_time = time.time()
     
     # --- Discover Host ---
