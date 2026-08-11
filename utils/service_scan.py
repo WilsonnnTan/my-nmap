@@ -1,5 +1,5 @@
 from scapy.all import IP, TCP, ICMP, sr, send, UDP, sndrcv, conf, AsyncSniffer
-from .nmap_type import Port
+from .nmap_type import Port, PortInfo
 from typing import Literal
 from dataclasses import dataclass, field
 import re
@@ -52,15 +52,53 @@ class ServiceScan:
     def __init__(self, probes_database:str = "assets/nmap_service_probes.txt"):
         self.probes_database = probes_database
         
-        self.excluded_port: list[Port] = []
+        self.excluded_ports: list[Port] = []
         self.probes: list[ServiceProbe] = []
         self.probes_tracker = -1     # counter to track self.probes index
         self.parse_probes_database()
     
-    def scanner(self):
+    def scanner(self, ports: list[PortInfo]):
+        """
+        Implementation of https://nmap.org/book/vscan-technique.html
+        Version and App scanner will blow all the stealth
+        
+        Algorithm:
+        1. Pass all open or open | filtered port to this scanner
+        2. Exclude port that is mentioned on self.excluded_ports
+        3. For TCP port, we start by:
+            - TCP Three way handshake
+            - if the connection succeeds, we change the port state to "open"
+            - once connection is made wait for 6 seconds to receive welcome banner from some services
+            - if response is received, we compare it with `NULL Probe` match and softmatch signatures
+            - if signature is matched then we are done with that port
+            - if signature is soft matched then we send other probes that are known to recognize the soft matched service type
+            - if no direct match is found, compare the response against fallback signatures from related probes. If the response looks like a delayed welcome banner, check it against the NULL probe signatures (the "NULL probe cheat").
+        4. This point is where we start for UDP port probes (and continue for TCP connections if the NULL probe failed or soft matched).
+        5. Send probe to probeable ports by: 
+            - identify probes that explicitly list the target port number as highly effective.
+            - send these probes sequentially in the order they appear in the nmap-service-probes file.
+        6. For each probe sent, wait for a response according to totalwaitms or default to 2s and compare it against signature regular expressions:
+            - if scanning UDP and a response is received, we change its port state to "open".
+            - if signature is matched then we are done with that port
+            - if signature is soft matched then we send other probes that are known to recognize the soft matched service type
+            - if no direct match is found, compare the response against fallback signatures from related probes. If the response looks like a delayed welcome banner, check it against the NULL probe signatures (the "NULL probe cheat").
+        7. If Probable Port Probes fail, sequentially test remaining existing probes:
+            - for TCP scans, establish a brand new connection for each probe to prevent previous probes from corrupting the service's state.
+            - evaluate responses using the same Full Match / Soft Match / Fallback logic from Step 6.
+        8. Handle Special Service Triggers:
+            - SSL/TLS: If a probe detects the port is running SSL, reconnect using SSL/TLS and completely restart the version scan algorithm through the encrypted tunnel to identify what is hiding behind it.
+        9. Handle Unrecognized Services:
+            - if one or more probes elicited a response but Nmap failed to fully recognize the service, print the response content as a "fingerprint" so the user can identify it manually
+        """
+        
+        
         pass
         
     def parse_probes_database(self):
+        """
+        Parse probes database into a list of ServiceProbe
+        """
+        
         with open(self.probes_database, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -121,7 +159,7 @@ class ServiceScan:
                 for p in range(start, end + 1):
                     result.append(Port(port_number=p, protocol=protocol))
 
-        self.excluded_port = result
+        self.excluded_ports = result
     
     def probe_parser(self, line:str):
         """
