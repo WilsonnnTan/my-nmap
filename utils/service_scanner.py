@@ -77,6 +77,14 @@ class ServiceScan:
     
     
     def exclude_parser(self, line:str):
+        """
+        Exclude Directive
+        # See: https://nmap.org/book/vscan-fileformat.html#vscan-db-exclude
+        
+        Syntax: Exclude <port specification>
+        Example: Exclude 53,T:9100,U:30000-40000
+        """
+        
         line = re.sub(r'^\s*Exclude\s+', '', line.strip(), flags=re.IGNORECASE)
         tokens = [t.strip() for t in line.split(',') if t.strip()]
 
@@ -102,6 +110,14 @@ class ServiceScan:
         self.excluded_port = result
     
     def probe_parser(self, line:str):
+        """
+        Probe Directive
+        # See: https://nmap.org/book/vscan-fileformat.html#vscan-db-probe
+        
+        Syntax: Probe <protocol> <probename> <probestring> [no-payload]
+        Example: Probe UDP Sqlping q|\x02| no-payload
+        """
+        
         # https://en.wikipedia.org/wiki/Escape_sequences_in_C
         escape_map = {
             '\\': b'\x5c',  # Backslash
@@ -116,8 +132,8 @@ class ServiceScan:
         }
 
         regex = re.compile(
-            r'^Probe\s+(TCP|UDP)\s+(\S+)\s+q(.)((?:(?!\3).)*)\3(?:\s+(no-payload))?\s*$'
-        )
+                    r'^Probe\s+(TCP|UDP)\s+(\S+)\s+q(.)((?:(?!\3).)*)\3(?:\s+(no-payload))?\s*$'
+                )
 
         match = regex.match(line)
         protocol, probe_name, delimeter, raw_probe_string, no_payload_flag = match.groups()
@@ -155,13 +171,36 @@ class ServiceScan:
         self.probes_tracker += 1
 
     def match_parser(self, line:str):
+        """
+        Match Directive
+        # See: https://nmap.org/book/vscan-fileformat.html#vscan-db-match
+        
+        Syntax: match <service> <pattern> [<versioninfo>]
+        Example: Probe UDP Sqlping q|\x02| no-payload
+        """
+
         pass
     
     def softmatch_parser(self, line:str):
+        """
+        Softmatch Directive
+        # See: https://nmap.org/book/vscan-fileformat.html#vscan-db-softmatch
+        
+        Syntax: softmatch <service> <pattern>
+        Example: softmatch ftp m/^220 [-.\w ]+ftp.*\r\n$/i
+        """
+        
         pass
     
     def ports_parser(self, line:str):
-        # Extract portlist after "ports "
+        """
+        Ports Directive
+        # See: https://nmap.org/book/vscan-fileformat.html#vscan-db-ports
+        
+        Syntax: ports <portlist>
+        Example: ports 111,4045,32750-32810,38978
+        """
+        
         match = re.search(r'ports\s+([\d,\-]+)', line)
         port_string = match.group(1)
         
@@ -181,8 +220,15 @@ class ServiceScan:
         self.probes[self.probes_tracker].ports = ports
     
     def sslports_parser(self, line:str):
-        # Extract portlist after "sslports "
-        match = re.search(r'sslports\s+([\d,\-]+)', line)
+        """
+        Sslports Directive
+        # See: https://nmap.org/book/vscan-fileformat.html#vscan-db-ports
+        
+        Syntax: sslports <portlist>
+        Example: sslports 443-445,80
+        """
+        
+        match = re.match(r'sslports\s+([\d,\-]+)', line)
         port_string = match.group(1)
         
         ports: list[Port] = []
@@ -201,25 +247,52 @@ class ServiceScan:
         self.probes[self.probes_tracker].sslports = ports
     
     def totalwaitms_parser(self, line:str):
-        # Extract time after "totalwaitms "
-        match = re.search(r'totalwaitms\s+(\d+)(?![,\-])', line)
+        """
+        Totalwaitms Directive
+        # See: https://nmap.org/book/vscan-fileformat.html#vscan-db-totalwaitms
+        
+        Syntax: totalwaitms <milliseconds>
+        Example: totalwaitms 6000
+        """
+        
+        match = re.match(r'totalwaitms\s+(\d+)(?![,\-])', line)
         self.probes[self.probes_tracker].totalwaitms = int(match.group(1))
     
     def tcpwrappedms_parser(self, line:str):
-        # Extract time after "tcpwrappedms "
-        match = re.search(r'tcpwrappedms\s+(\d+)(?![,\-])', line)
+        """
+        Tcpwrappedms Directive
+        # See: https://nmap.org/book/vscan-fileformat.html#vscan-db-tcpwrappedms
+        
+        Syntax: tcpwrappedms <milliseconds>
+        Example: tcpwrappedms 3000
+        """
+        match = re.match(r'tcpwrappedms\s+(\d+)(?![,\-])', line)
         self.probes[self.probes_tracker].tcpwrappedms = int(match.group(1))
     
     def rarity_parser(self, line:str):
-        # Extract rarity after "rarity "
-        match = re.search(r'rarity\s+(\d+)(?![,\-])', line)
+        """
+        Rarity Directive
+        # See: https://nmap.org/book/vscan-fileformat.html#vscan-db-rarity
+        
+        Syntax: rarity <value between 1 and 9>
+        Example: rarity 6
+        """
+        
+        match = re.match(r'rarity\s+(\d+)(?![,\-])', line)
         self.probes[self.probes_tracker].rarity = int(match.group(1))
     
     def fallback_parser(self, line:str):
-        # Extract fallback probes after "fallback "
-        match = re.search(r'fallback\s+([\w,\-]+)', line)
+        """
+        Fallback Directive
+        # See: https://nmap.org/book/vscan-fileformat.html#vscan-db-fallback
+        
+        Syntax: fallback <Comma separated list of probes>
+        Example: fallback GetRequest,GenericLines
+        """
+        
+        match = re.match(r'fallback\s+([\w,\-]+)', line)
         self.probes[self.probes_tracker].fallback = match.group(1).split(",")
 
 
 scanner=ServiceScan()
-print(scanner.probe_parser("Probe UDP Quake3_getstatus q|\xff\xff\xff\xffgetstatus|"))
+print(scanner.match_parser("match 1c-server m|^S\xf5\xc6\x1a{| p/1C:Enterprise business management server/"))
