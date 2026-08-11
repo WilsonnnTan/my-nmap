@@ -10,7 +10,6 @@ import re
 @dataclass
 class Probe:
     protocol: Literal["UDP", "TCP"]
-    probe_name: str
     probe_string: bytearray    # converted to byte during parsing
     no_payload: Literal["no-payload"] | None = None
     source_port: Port | None = None
@@ -53,8 +52,8 @@ class ServiceScan:
         self.probes_database = probes_database
         
         self.excluded_ports: list[Port] = []
-        self.probes: list[ServiceProbe] = []
-        self.probes_tracker = -1     # counter to track self.probes index
+        self.probes: dict[str, ServiceProbe] = {}   # example: {"probe_name": ServiceProbe, ....}
+        self.probes_tracker = None     # track self.probes by key index
         self.parse_probes_database()
     
     def scanner(self, ports: list[PortInfo]):
@@ -110,7 +109,7 @@ class ServiceScan:
                 elif line.startswith("Probe"):
                     self.probe_parser(line)
                 # continue if no probes exist in self.probes
-                elif self.probes_tracker < 0:
+                elif not self.probes_tracker:
                     continue
                 elif line.startswith("match") or line.startswith("softmatch"):
                     self.match_parser(line)
@@ -131,7 +130,7 @@ class ServiceScan:
     def exclude_parser(self, line:str):
         """
         Exclude Directive
-        # See: https://nmap.org/book/vscan-fileformat.html#vscan-db-exclude
+        See: https://nmap.org/book/vscan-fileformat.html#vscan-db-exclude
         
         Syntax: Exclude <port specification>
         Example: Exclude 53,T:9100,U:30000-40000
@@ -164,7 +163,7 @@ class ServiceScan:
     def probe_parser(self, line:str):
         """
         Probe Directive
-        # See: https://nmap.org/book/vscan-fileformat.html#vscan-db-probe
+        See: https://nmap.org/book/vscan-fileformat.html#vscan-db-probe
         
         Syntax: Probe <protocol> <probename> <probestring> [no-payload]
         Example: Probe UDP Sqlping q|\x02| no-payload
@@ -218,27 +217,26 @@ class ServiceScan:
         result = ServiceProbe(
                     probe=Probe(
                         protocol=protocol,
-                        probe_name=probe_name,
                         probe_string=probe_string,
                         no_payload=(True if no_payload_flag else False),
                         source_port=source_port_obj
                     )
                 )
         
-        self.probes.append(result)
-        self.probes_tracker += 1
+        self.probes[probe_name] = result
+        self.probes_tracker = probe_name
 
     def match_parser(self, line:str):
         """
         Match Directive
-        # See: https://nmap.org/book/vscan-fileformat.html#vscan-db-match
+        See: https://nmap.org/book/vscan-fileformat.html#vscan-db-match
         
         Syntax: match <service> <pattern> [<versioninfo>]
         
         ----
         
         Softmatch Directive
-        # See: https://nmap.org/book/vscan-fileformat.html#vscan-db-softmatch
+        See: https://nmap.org/book/vscan-fileformat.html#vscan-db-softmatch
         
         Syntax: softmatch <service> <pattern>
         """
@@ -309,7 +307,7 @@ class ServiceScan:
     def ports_parser(self, line:str):
         """
         Ports Directive
-        # See: https://nmap.org/book/vscan-fileformat.html#vscan-db-ports
+        See: https://nmap.org/book/vscan-fileformat.html#vscan-db-ports
         
         Syntax: ports <portlist>
         Example: ports 111,4045,32750-32810,38978
@@ -336,7 +334,7 @@ class ServiceScan:
     def sslports_parser(self, line:str):
         """
         Sslports Directive
-        # See: https://nmap.org/book/vscan-fileformat.html#vscan-db-ports
+        See: https://nmap.org/book/vscan-fileformat.html#vscan-db-ports
         
         Syntax: sslports <portlist>
         Example: sslports 443-445,80
@@ -363,7 +361,7 @@ class ServiceScan:
     def totalwaitms_parser(self, line:str):
         """
         Totalwaitms Directive
-        # See: https://nmap.org/book/vscan-fileformat.html#vscan-db-totalwaitms
+        See: https://nmap.org/book/vscan-fileformat.html#vscan-db-totalwaitms
         
         Syntax: totalwaitms <milliseconds>
         Example: totalwaitms 6000
@@ -375,7 +373,7 @@ class ServiceScan:
     def tcpwrappedms_parser(self, line:str):
         """
         Tcpwrappedms Directive
-        # See: https://nmap.org/book/vscan-fileformat.html#vscan-db-tcpwrappedms
+        See: https://nmap.org/book/vscan-fileformat.html#vscan-db-tcpwrappedms
         
         Syntax: tcpwrappedms <milliseconds>
         Example: tcpwrappedms 3000
@@ -386,7 +384,7 @@ class ServiceScan:
     def rarity_parser(self, line:str):
         """
         Rarity Directive
-        # See: https://nmap.org/book/vscan-fileformat.html#vscan-db-rarity
+        See: https://nmap.org/book/vscan-fileformat.html#vscan-db-rarity
         
         Syntax: rarity <value between 1 and 9>
         Example: rarity 6
@@ -398,7 +396,7 @@ class ServiceScan:
     def fallback_parser(self, line:str):
         """
         Fallback Directive
-        # See: https://nmap.org/book/vscan-fileformat.html#vscan-db-fallback
+        See: https://nmap.org/book/vscan-fileformat.html#vscan-db-fallback
         
         Syntax: fallback <Comma separated list of probes>
         Example: fallback GetRequest,GenericLines
