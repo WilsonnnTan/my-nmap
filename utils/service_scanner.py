@@ -13,6 +13,7 @@ class Probe:
     probe_name: str
     probe_string: bytearray    # converted to byte during parsing
     no_payload: Literal["no-payload"] | None = None
+    source_port: Port | None = None
 
 
 @dataclass
@@ -48,7 +49,7 @@ class ServiceProbe:
 
 
 class ServiceScan:
-    def __init__(self, probes_database:str = "assets/test_probes.txt"):
+    def __init__(self, probes_database:str = "assets/nmap_service_probes.txt"):
         self.probes_database = probes_database
         
         self.excluded_port: list[Port] = []
@@ -58,7 +59,7 @@ class ServiceScan:
         print(self.probes)
         
     def parse_probes_database(self):
-        with open(self.probes_database, "r") as f:
+        with open(self.probes_database, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 # Ignore comments
@@ -143,11 +144,13 @@ class ServiceScan:
         }
 
         regex = re.compile(
-                    r'^Probe\s+(TCP|UDP)\s+(\S+)\s+q(.)((?:(?!\3).)*)\3(?:\s+(no-payload))?\s*$'
+                    r'^Probe\s+(TCP|UDP)\s+(\S+)\s+q(.)((?:(?!\3).)*)\3(?:\s+(no-payload))?(?:\s+source=(\d+))?\s*$'
                 )
 
         match = regex.match(line)
-        protocol, probe_name, delimeter, raw_probe_string, no_payload_flag = match.groups()
+        if not match:
+            print(line)
+        protocol, probe_name, delimeter, raw_probe_string, no_payload_flag, source_port = match.groups()
         
         # Decoded raw probe string into byte
         probe_string = bytearray()
@@ -169,12 +172,16 @@ class ServiceScan:
                 probe_string.append(ord(char))
                 i += 1
         
+        # construct source port object
+        source_port_obj = Port(port_number=int(source_port), protocol=protocol) if source_port else None
+        
         result = ServiceProbe(
                     probe=Probe(
                         protocol=protocol,
                         probe_name=probe_name,
                         probe_string=probe_string,
-                        no_payload=(True if no_payload_flag else False)
+                        no_payload=(True if no_payload_flag else False),
+                        source_port=source_port_obj
                     )
                 )
         
