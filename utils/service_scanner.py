@@ -16,10 +16,22 @@ class Probe:
 
 
 @dataclass
+class VersionInfo:
+    product_name: str | None = None  # p/
+    version: str | None = None       # v/
+    info: str | None = None          # i/
+    hostname: str | None = None      # h/
+    os: str | None = None            # o/
+    device_type: str | None = None   # d/
+    cpe: list[dict[str, str]] = field(default_factory=list)  # cpe:/.../[class]
+
+
+@dataclass
 class Match:
     service: str
-    pattern: str
-    version_info: str
+    pattern: str     # regex pattern
+    option: str     # example: "i" (match case-insensitive), "s" (includes newlines in the '.' specifier)
+    version_info: VersionInfo
 
 
 @dataclass
@@ -36,13 +48,14 @@ class ServiceProbe:
 
 
 class ServiceScan:
-    def __init__(self, probes_database:str = "assets/nmap_service_probes.txt"):
+    def __init__(self, probes_database:str = "assets/test_probes.txt"):
         self.probes_database = probes_database
         
         self.excluded_port: list[Port] = []
         self.probes: list[ServiceProbe] = []
         self.probes_tracker = -1     # counter to track self.probes index
-        # self.parse_probes_database()
+        self.parse_probes_database()
+        print(self.probes)
         
     def parse_probes_database(self):
         with open(self.probes_database, "r") as f:
@@ -58,10 +71,8 @@ class ServiceScan:
                 # continue if no probes exist in self.probes
                 elif self.probes_tracker < 0:
                     continue
-                elif line.startswith("match"):
+                elif line.startswith("match") or line.startswith("softmatch"):
                     self.match_parser(line)
-                elif line.startswith("softmatch"):
-                    self.softmatch_parser(line)
                 elif line.startswith("ports"):
                     self.ports_parser(line)
                 elif line.startswith("sslports"):
@@ -176,21 +187,77 @@ class ServiceScan:
         # See: https://nmap.org/book/vscan-fileformat.html#vscan-db-match
         
         Syntax: match <service> <pattern> [<versioninfo>]
-        Example: Probe UDP Sqlping q|\x02| no-payload
-        """
-
-        pass
-    
-    def softmatch_parser(self, line:str):
-        """
+        
+        ----
+        
         Softmatch Directive
         # See: https://nmap.org/book/vscan-fileformat.html#vscan-db-softmatch
         
         Syntax: softmatch <service> <pattern>
-        Example: softmatch ftp m/^220 [-.\w ]+ftp.*\r\n$/i
         """
         
-        pass
+        # --- Parse match line ---
+        match_pattern = re.compile(
+            r'^\s*(?P<is_soft>soft)?match\s+'     # "match" or "softmatch"
+            r'(?P<service>\S+)\s+'                # service name (may be prefixed ssl/)
+            r'm(?P<delim>\S)'                     # 'm' + one-char delimiter
+            r'(?P<pattern>.*?)(?P=delim)'         # pattern body up to the matching delim
+            r'(?P<option>[a-zA-Z]*)'              # pattern options: i, s
+            r'(?:\s+(?P<versioninfo>.*))?\s*$',   # everything else is version info
+            re.DOTALL,
+        )
+        
+        match = match_pattern.match(line)
+        is_soft = True if match.group("is_soft") else False
+        service = match.group("service")
+        pattern = match.group("pattern")
+        option = match.group("option")
+        version_info_raw = match.group("versioninfo") or ""
+        
+        # --- Parse version info ---
+        version_info = VersionInfo()
+        version_info_pattern = re.compile(
+            r'(?P<simple>(?P<tag>[pvihod])(?P<sdelim>\S)(?P<svalue>.*?)(?P=sdelim))'
+            r'|'
+            r'(?P<cpe>cpe:(?P<cdelim>\S)(?P<cvalue>.*?)(?P=cdelim)(?P<cclass>[aho]?))'
+        )
+        
+        for info in version_info_pattern.finditer(version_info_raw):
+            # for non cpe
+            if info.group('simple'):
+                tag, value = info.group('tag'), info.group('svalue')
+                if tag == 'p':
+                    version_info.product_name = value
+                elif tag == 'v':
+                    version_info.version = value
+                elif tag == 'i':
+                    version_info.info = value
+                elif tag == 'h':
+                    version_info.hostname = value
+                elif tag == 'o':
+                    version_info.os = value
+                elif tag == 'd':
+                    version_info.device_type = value
+            # for cpe
+            # https://nmap.org/book/output-formats-cpe.html
+            else:
+                version_info.cpe.append({
+                    'name': info.group('cvalue'),
+                    'class': info.group('cclass') or 'a',
+                })
+        
+        
+        result = Match(
+                    service=service,
+                    pattern=pattern,
+                    option=option,
+                    version_info=version_info
+                )
+
+        if is_soft:
+            self.probes[self.probes_tracker].soft_match.append(result)
+        else:
+            self.probes[self.probes_tracker].match.append(result)
     
     def ports_parser(self, line:str):
         """
@@ -295,4 +362,3 @@ class ServiceScan:
 
 
 scanner=ServiceScan()
-print(scanner.match_parser("match 1c-server m|^S\xf5\xc6\x1a{| p/1C:Enterprise business management server/"))
