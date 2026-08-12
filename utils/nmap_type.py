@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import Literal
+from service_scan import VersionInfo
 
 # Bit map for TCP flags
 class TCPFlag:
@@ -38,7 +39,7 @@ class Port:
 class PortInfo(Port):
     state: Literal["open", "closed", "filtered", "open | filtered"]
     service: str | None = None
-    version: str | None = None
+    version_info: VersionInfo | None = None
 
     def is_open(self):
         return "open" == self.state

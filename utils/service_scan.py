@@ -1,9 +1,12 @@
-from scapy.all import IP, TCP, ICMP, sr, send, UDP, sndrcv, conf, AsyncSniffer
-from .nmap_type import Port, PortInfo
+from scapy.all import IP, TCP, ICMP, sr1, send, UDP, sndrcv, conf, AsyncSniffer
+from nmap_type import Port, PortInfo, TCPFlag
+from packet_sender import open_tcp_connection, read_packets
 from typing import Literal
 from dataclasses import dataclass, field
 import re
-
+import pcre
+import time
+import asyncio
 
 # Probes Database File Format:
 # https://nmap.org/book/vscan-fileformat.html
@@ -55,8 +58,11 @@ class ServiceScan:
         self.probes: dict[str, ServiceProbe] = {}   # example: {"probe_name": ServiceProbe, ....}
         self.probes_tracker = None     # track self.probes by key index
         self.parse_probes_database()
-    
-    def scanner(self, ports: list[PortInfo]):
+        
+        self.semaphore = asyncio.Semaphore(50)
+
+    # ================================ Service Scanner =========================================    
+    async def scan(self, host: str, ports: list[PortInfo]) -> list[PortInfo]:
         """
         Implementation of https://nmap.org/book/vscan-technique.html
         Version and App scanner will blow all the stealth
@@ -88,11 +94,147 @@ class ServiceScan:
             - SSL/TLS: If a probe detects the port is running SSL, reconnect using SSL/TLS and completely restart the version scan algorithm through the encrypted tunnel to identify what is hiding behind it.
         9. Handle Unrecognized Services:
             - if one or more probes elicited a response but Nmap failed to fully recognize the service, print the response content as a "fingerprint" so the user can identify it manually
+        """       
+        # This is the final output     
+        results: list[PortInfo] = []
+        
+        # --- Seperate excluded, TCP, and UDP ports ---
+        tcp_ports: list[PortInfo]= []
+        udp_ports: list[PortInfo] = []
+        
+        for port in ports:
+            if port in self.excluded_ports or port.is_closed() or port.is_filtered():
+                results.append(port)
+            elif port.is_tcp():
+                tcp_ports.append(port)
+            elif port.is_udp():
+                udp_ports.append(port)
+        
+        # --- Handle NULL Probe ---
+        null_probe_results = await asyncio.gather(*(self.tcp_null_probe(host, port) for port in tcp_ports))
+        unmatched_or_soft_matched_ports = []
+        for port, null_probe_result in zip(tcp_ports, null_probe_results):
+            if null_probe_result == "match" or null_probe_result == "failed_to_connect":
+                results.append(port)
+            else:
+                unmatched_or_soft_matched_ports.append(port)
+        
+        # Update old TCP ports to hold unmatched or softmatched
+        tcp_ports = unmatched_or_soft_matched_ports
+        
+        # --- Send the rest of the probes based on listed port / rarity ---
+        
+            
+                        
+        return results
+
+    async def tcp_null_probe(self, host:str, port: PortInfo) -> Literal["match", "soft_match", "failed_to_connect"] | None:
         """
+        Open TCP connection and wait for welcome banner for 6 seconds before closing connection
+        """
+        async with self.semaphore:
+            connection = open_tcp_connection(host, port)
+            if not connection:
+                # Rejected/No response means port is closed/filtered
+                # Use filtered to avoid complexity
+                port.state = "filtered"
+                return "failed_to_connect"
+            reader, writer = connection
+            
+            # Read welcome banner packets
+            welcome_banner = read_packets(reader)
+
+            # Check probe match/softmatch
+            is_match = self.check_match(service=None, is_null_probe=True, protocol="TCP", response=welcome_banner)
+            # Close TCP connection
+            writer.close()
+            
+            if is_match:
+                match_or_soft_match, service, version_info = is_match
+                port.service = service
+                port.version_info = version_info
+                return match_or_soft_match
+            else:
+                return None
+
+    def check_match(self, 
+                    service: str | None, 
+                    is_null_probe: bool,
+                    protocol: Literal["TCP", "UDP"],
+                    response: bytes,
+                    ) -> tuple[Literal["match", "soft_match"], str, VersionInfo] | None:
+        """
+        check response match or softmatch
         
+        Return: (match, <service_name>, <VersionInfo obj>)
+        """
+        response_str = response.decode('utf-8')
         
-        pass
+        if is_null_probe:
+            # Handle NULL Probe match and softmatch
+            probe = self.probes["NULL"]
+            # check match
+            for m in probe.match:
+                flags = self.build_flags(m.option)
+                match_pattern = pcre.compile(m.pattern, flags=flags)
+                match = match_pattern.match(response_str)
+                if match:
+                    return ("match", m.service, self.resolve_version_info(m.version_info, match))
+            
+            # check softmatch
+            for sm in probe.soft_match:
+                flags = self.build_flags(sm.option)
+                soft_match_pattern = pcre.compile(sm.pattern, flgas=flags)
+                match = soft_match_pattern.match(response_str)
+                if match:
+                    return ("soft_match", m.service, self.resolve_version_info(sm.version_info, match))
+        else:
+            # Sort probes based on rarity and port specific and more
+            probes: dict[str, ServiceProbe] = self.probes_sorter()
+            
+        return None
+
+    def build_flags(self, option: str):
+        """build match option flags for regex"""
+        flags = 0
+        if 'i' in option:
+            flags |= pcre.IGNORECASE
+        if 's' in option:
+            flags |= pcre.DOTALL
+        return flags
         
+    def resolve_version_info(self, vi_template: VersionInfo, match) -> VersionInfo:
+        """Create version_info from extracted response"""       
+        return VersionInfo(
+            product_name=self.replace_template(vi_template.product_name, match),
+            version=self.replace_template(vi_template.version, match),
+            info=self.replace_template(vi_template.info, match),
+            hostname=self.replace_template(vi_template.hostname, match),
+            os=self.replace_template(vi_template.os, match),
+            device_type=self.replace_template(vi_template.device_type, match),
+            cpe=[self.replace_template(c, match) for c in vi_template.cpe],
+        )
+        
+    def replace_template(self, template: str | None, match) -> str | None:
+        """Replace $1, $2, ... in a template with match.group()."""
+        placeholder_pattern = re.compile(r'\$(\d+)')
+        
+        if template is None:
+            return None
+
+        def replace(mo: re.Match) -> str:
+            idx = int(mo.group(1))
+            try:
+                val = match.group(idx)
+            except IndexError:
+                val = None
+            return val if not val else ''
+
+        result = placeholder_pattern.sub(replace, template)
+        return result or None 
+
+
+    # ================================ Database Parser =========================================    
     def parse_probes_database(self):
         """
         Parse probes database into a list of ServiceProbe
@@ -405,3 +547,5 @@ class ServiceScan:
         match = re.match(r'fallback\s+([\w,\-]+)', line)
         self.probes[self.probes_tracker].fallback = match.group(1).split(",")
 
+scan = ServiceScan()
+scan.scan("45.33.32.156", [PortInfo(port_number=1612, protocol="TCP", state="open")])

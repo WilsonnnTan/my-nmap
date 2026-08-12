@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "click>=8.4.2",
+    "pypcre>=0.6.0",
     "scapy>=2.7.0",
     "texttable>=1.7.0",
 ]

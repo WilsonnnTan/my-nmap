@@ -29,6 +29,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "click" },
+    { name = "pypcre" },
     { name = "scapy" },
     { name = "texttable" },
 ]
@@ -36,9 +37,16 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.4.2" },
+    { name = "pypcre", specifier = ">=0.6.0" },
     { name = "scapy", specifier = ">=2.7.0" },
     { name = "texttable", specifier = ">=1.7.0" },
 ]
+
+[[package]]
+name = "pypcre"
+version = "0.6.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/72/0d/77a616ce89f12ce4fbd747b905747e5ede37821a8470010cbdcf6ce211ee/pypcre-0.6.0.tar.gz", hash = "sha256:6df9f523b0c70114883e95a72e10b68ac7f13267660de51aa5e049e1a46eb35f", size = 154603, upload-time = "2026-08-09T05:46:14.3Z" }
 
 [[package]]
 name = "scapy"

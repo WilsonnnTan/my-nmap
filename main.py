@@ -43,10 +43,17 @@ def my_nmap(target, sT, sU, top_ports):
     elif sU:
         udp_scan_result = udp_scan(live_hosts, port_count=top_ports)
 
+    # --- Merge scan result ---
+    scan_result = tcp_scan_result
+    for key, val in udp_scan_result.items():
+        scan_result[key].extend(val)
     
-    # --- Output ---
-    output(tcp_scan_result) if tcp_scan_result else None
-    output(udp_scan_result) if udp_scan_result else None
+    # --- Service scan ---
+    for host, ports in scan_result.items():
+        scan_result[key] = service_scan.scan(host, ports)
+    
+    # --- Print output ---
+    output(scan_result) if scan_result else None
     print(f"Scan done: {len(live_hosts)} host up scanned in {time.time() - start_time:.2f} seconds")
     
 
@@ -56,7 +63,7 @@ def output(scan_result: dict[str, list[PortInfo]]):
         
         # initiate table and header
         table = texttable.Texttable()
-        table.add_row(["PORT", "STATE"])
+        table.add_row(["PORT", "STATE", "SERVICE", "VERSION"])
         
         # --- count each port state ---
         counter = {
@@ -79,7 +86,7 @@ def output(scan_result: dict[str, list[PortInfo]]):
         should_print = []
         should_not_print = []
         for key, val in counter.items():
-            if val <= 10:
+            if val <= 7:
                 should_print.append(key)
             else:
                 should_not_print.append(key)
@@ -92,7 +99,12 @@ def output(scan_result: dict[str, list[PortInfo]]):
         # --- print the port table ---
         for port_info in result:
             if port_info.state in should_print:
-                table.add_row([f"{port_info.port_number}/{port_info.protocol}", port_info.state])
+                table.add_row([
+                    f"{port_info.port_number}/{port_info.protocol}", 
+                    port_info.state,
+                    port_info.service if port_info.service else "",
+                    port_info.version if port_info.version else ""
+                ])
         
         print("")
         print(table.draw())
