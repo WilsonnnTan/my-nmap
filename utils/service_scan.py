@@ -1,55 +1,12 @@
 from scapy.all import IP, TCP, ICMP, sr1, send, UDP, sndrcv, conf, AsyncSniffer
-from nmap_type import Port, PortInfo, TCPFlag
-from packet_sender import open_tcp_connection, read_packets
+from utils.nmap_type import Port, PortInfo, VersionInfo, ServiceProbe, Match, Probe
+from utils.packet_sender import open_tcp_connection, read_welcome_banner
 from typing import Literal
-from dataclasses import dataclass, field
-import re
-import pcre
-import time
-import asyncio
+import re, pcre, time, asyncio, copy
+
 
 # Probes Database File Format:
 # https://nmap.org/book/vscan-fileformat.html
-@dataclass
-class Probe:
-    protocol: Literal["UDP", "TCP"]
-    probe_string: bytearray    # converted to byte during parsing
-    no_payload: Literal["no-payload"] | None = None
-    source_port: Port | None = None
-
-
-@dataclass
-class VersionInfo:
-    product_name: str | None = None  # p/
-    version: str | None = None       # v/
-    info: str | None = None          # i/
-    hostname: str | None = None      # h/
-    os: str | None = None            # o/
-    device_type: str | None = None   # d/
-    cpe: list[dict[str, str]] = field(default_factory=list)  # cpe:/.../[class]
-
-
-@dataclass
-class Match:
-    service: str
-    pattern: str     # regex pattern
-    option: str     # example: "i" (match case-insensitive), "s" (includes newlines in the '.' specifier)
-    version_info: VersionInfo
-
-
-@dataclass
-class ServiceProbe:
-    probe: Probe
-    match: list[Match] = field(default_factory=list)
-    soft_match: list[Match] = field(default_factory=list)
-    ports: list[Port] = field(default_factory=list)
-    sslports: list[Port] = field(default_factory=list)
-    totalwaitms: int | None = None                          # miliseconds
-    tcpwrappedms: int | None = None                         # miliseconds
-    rarity: Literal[1, 2, 3, 4, 5, 6, 7, 8] | None = None   # higher = more rare
-    fallback: list[str] | None = None                       # probe_name fallback
-
-
 class ServiceScan:
     def __init__(self, probes_database:str = "assets/nmap_service_probes.txt"):
         self.probes_database = probes_database
@@ -59,7 +16,7 @@ class ServiceScan:
         self.probes_tracker = None     # track self.probes by key index
         self.parse_probes_database()
         
-        self.semaphore = asyncio.Semaphore(50)
+        self.semaphore = asyncio.Semaphore(100)
 
     # ================================ Service Scanner =========================================    
     async def scan(self, host: str, ports: list[PortInfo]) -> list[PortInfo]:
@@ -111,15 +68,25 @@ class ServiceScan:
                 udp_ports.append(port)
         
         # --- Handle NULL Probe ---
-        null_probe_results = await asyncio.gather(*(self.tcp_null_probe(host, port) for port in tcp_ports))
+        null_probe_results = await asyncio.gather(
+                                *(
+                                    self.send_recv_probe(
+                                        host=host,
+                                        port=port,
+                                        service=None,
+                                        is_null_probe=True,
+                                    )
+                                    for port in tcp_ports
+                                )
+                            )
+        
+        # Update old TCP ports to hold unmatched or softmatched
         unmatched_or_soft_matched_ports = []
         for port, null_probe_result in zip(tcp_ports, null_probe_results):
             if null_probe_result == "match" or null_probe_result == "failed_to_connect":
                 results.append(port)
             else:
                 unmatched_or_soft_matched_ports.append(port)
-        
-        # Update old TCP ports to hold unmatched or softmatched
         tcp_ports = unmatched_or_soft_matched_ports
         
         # --- Send the rest of the probes based on listed port / rarity ---
@@ -128,71 +95,70 @@ class ServiceScan:
                         
         return results
 
-    async def tcp_null_probe(self, host:str, port: PortInfo) -> Literal["match", "soft_match", "failed_to_connect"] | None:
-        """
-        Open TCP connection and wait for welcome banner for 6 seconds before closing connection
-        """
-        async with self.semaphore:
-            connection = open_tcp_connection(host, port)
-            if not connection:
-                # Rejected/No response means port is closed/filtered
-                # Use filtered to avoid complexity
-                port.state = "filtered"
-                return "failed_to_connect"
-            reader, writer = connection
-            
-            # Read welcome banner packets
-            welcome_banner = read_packets(reader)
 
-            # Check probe match/softmatch
-            is_match = self.check_match(service=None, is_null_probe=True, protocol="TCP", response=welcome_banner)
-            # Close TCP connection
-            writer.close()
-            
-            if is_match:
-                match_or_soft_match, service, version_info = is_match
-                port.service = service
-                port.version_info = version_info
-                return match_or_soft_match
-            else:
-                return None
-
-    def check_match(self, 
-                    service: str | None, 
-                    is_null_probe: bool,
-                    protocol: Literal["TCP", "UDP"],
-                    response: bytes,
-                    ) -> tuple[Literal["match", "soft_match"], str, VersionInfo] | None:
+    async def send_recv_probe(self,
+                            host: str,
+                            port: PortInfo,
+                            service: str | None, 
+                            is_null_probe: bool,
+                          ) -> Literal["match", "soft_match", "failed_to_connect", None]:
         """
-        check response match or softmatch
+        Handle probe sender and probe matcher
         
         Return: (match, <service_name>, <VersionInfo obj>)
         """
-        response_str = response.decode('utf-8')
+        async with self.semaphore:
+            if is_null_probe and (service or port.protocol == "UDP"):
+                print("It is not possible to have UDP NULL Probe or having service when listening to NULL Probe")
+                print(f"port: {port}")
+                return None
         
-        if is_null_probe:
-            # Handle NULL Probe match and softmatch
-            probe = self.probes["NULL"]
-            # check match
-            for m in probe.match:
-                flags = self.build_flags(m.option)
-                match_pattern = pcre.compile(m.pattern, flags=flags)
-                match = match_pattern.match(response_str)
-                if match:
-                    return ("match", m.service, self.resolve_version_info(m.version_info, match))
-            
-            # check softmatch
-            for sm in probe.soft_match:
-                flags = self.build_flags(sm.option)
-                soft_match_pattern = pcre.compile(sm.pattern, flgas=flags)
-                match = soft_match_pattern.match(response_str)
-                if match:
-                    return ("soft_match", m.service, self.resolve_version_info(sm.version_info, match))
-        else:
-            # Sort probes based on rarity and port specific and more
-            probes: dict[str, ServiceProbe] = self.probes_sorter()
-            
-        return None
+            # ========== Handle NULL Probe ============
+            if is_null_probe and port.protocol == "TCP":
+                # --- Open TCP connection ---
+                connection = await open_tcp_connection(host, port)
+                if not connection:
+                    # Rejected/No response means port is closed/filtered
+                    # Use filtered to avoid complexity
+                    port.state = "filtered"
+                    return "failed_to_connect"
+                reader, writer = connection
+                
+                # --- Listen to NULL Probe packets for 6 secs ---
+                welcome_banner = await read_welcome_banner(reader)
+                # Close Connection
+                writer.close()
+                # Decode from bytes to str
+                welcome_banner_str = welcome_banner.decode("utf-8") if welcome_banner else ""
+                
+                # --- Handle NULL Probe match and softmatch ---
+                probe = self.probes["NULL"]
+                # check match
+                for m in probe.match:
+                    flags = self.build_flags(m.option)
+                    match_pattern = pcre.compile(m.pattern, flags=flags)
+                    match = match_pattern.match(welcome_banner_str)
+                    if match:
+                        port.service = m.service
+                        port.version_info = self.resolve_version_info(m.version_info, match)
+                        return "match"
+                
+                # check softmatch
+                for sm in probe.soft_match:
+                    flags = self.build_flags(sm.option)
+                    soft_match_pattern = pcre.compile(sm.pattern, flags=flags)
+                    match = soft_match_pattern.match(welcome_banner_str)
+                    if match:
+                        port.service = sm.service
+                        port.version_info = self.resolve_version_info(sm.version_info, match)
+                        return "soft_match"
+                
+                return None
+            else:
+                # handle the rest probes
+                pass
+                
+            return None
 
     def build_flags(self, option: str):
         """build match option flags for regex"""
@@ -212,7 +178,7 @@ class ServiceScan:
             hostname=self.replace_template(vi_template.hostname, match),
             os=self.replace_template(vi_template.os, match),
             device_type=self.replace_template(vi_template.device_type, match),
-            cpe=[self.replace_template(c, match) for c in vi_template.cpe],
+            cpe=[self.replace_template(c["name"], match) for c in vi_template.cpe],
         )
         
     def replace_template(self, template: str | None, match) -> str | None:
@@ -228,12 +194,12 @@ class ServiceScan:
                 val = match.group(idx)
             except IndexError:
                 val = None
-            return val if not val else ''
+            return val if val else ''
 
         result = placeholder_pattern.sub(replace, template)
         return result or None 
 
-
+    
     # ================================ Database Parser =========================================    
     def parse_probes_database(self):
         """
@@ -546,6 +512,3 @@ class ServiceScan:
         
         match = re.match(r'fallback\s+([\w,\-]+)', line)
         self.probes[self.probes_tracker].fallback = match.group(1).split(",")
-
-scan = ServiceScan()
-scan.scan("45.33.32.156", [PortInfo(port_number=1612, protocol="TCP", state="open")])

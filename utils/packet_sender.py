@@ -34,8 +34,8 @@ async def open_tcp_connection(host:str, port: PortInfo):
         return None
     
     
-async def read_packets(reader) -> bytes | None:
-    # Wait for welcome banner (NULL Probe) (6s timeout)
+async def read_welcome_banner(reader: asyncio.StreamReader) -> bytes | None:
+    """Wait for welcome banner (NULL Probe) (6s timeout)"""
     chunks = []
     while True:
         try:

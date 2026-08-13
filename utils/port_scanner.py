@@ -1,8 +1,8 @@
 from scapy.all import IP, TCP, ICMP, send, UDP
 from collections import defaultdict
 
-from .packet_sender import send_packets
-from .nmap_type import PortInfo, TCPFlag
+from utils.packet_sender import send_packets
+from utils.nmap_type import PortInfo, TCPFlag
 
 # TCP SYN scan
 def tcp_syn_scan(hosts: list[str], port_count=100) -> dict[str, list[PortInfo]]:

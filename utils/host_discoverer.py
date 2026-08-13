@@ -1,7 +1,7 @@
 from scapy.all import IP, TCP, ICMP, sr, send, Ether, srp, ARP
 import ipaddress
 import time
-from .nmap_type import TCPFlag
+from utils.nmap_type import TCPFlag
 
 
 # Discover live host

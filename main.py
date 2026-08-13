@@ -1,6 +1,4 @@
-import click
-import texttable
-import time
+import click, texttable, time, asyncio
 from utils.host_discoverer import discover_live_host
 from utils.port_scanner import tcp_syn_scan, udp_scan
 from utils.nmap_type import PortInfo
@@ -16,6 +14,11 @@ def my_nmap(target, sT, sU, top_ports):
     """
     TARGET is the target IP/Network (Hostname not supported)
     """
+    # initialize event loop
+    asyncio.run(start_nmap(target, sT, sU, top_ports))
+
+
+async def start_nmap(target, sT, sU, top_ports):
     print("Initializing Service Probes Database...")
     service_scan = ServiceScan()
     print("Starting network scan...")
@@ -28,7 +31,6 @@ def my_nmap(target, sT, sU, top_ports):
         print(f"Scan report for {target}")
         print("No live host found.")
         return
-    
     
     # --- Port Scan ---
     tcp_scan_result = None
@@ -49,8 +51,9 @@ def my_nmap(target, sT, sU, top_ports):
         scan_result[key].extend(val)
     
     # --- Service scan ---
+    # Update later to support scan concurrently
     for host, ports in scan_result.items():
-        scan_result[key] = service_scan.scan(host, ports)
+        scan_result[host] = await service_scan.scan(host, ports)
     
     # --- Print output ---
     output(scan_result) if scan_result else None
@@ -103,7 +106,7 @@ def output(scan_result: dict[str, list[PortInfo]]):
                     f"{port_info.port_number}/{port_info.protocol}", 
                     port_info.state,
                     port_info.service if port_info.service else "",
-                    port_info.version if port_info.version else ""
+                    port_info.version_info if port_info.version_info else ""
                 ])
         
         print("")
