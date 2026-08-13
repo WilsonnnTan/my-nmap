@@ -21,27 +21,30 @@ def send_packets(packets, is_tcp=True):
     return answered, unanswered
 
 
-async def open_tcp_connection(host:str, port: PortInfo):
+async def open_tcp_connection(host:str, port: PortInfo) -> tuple[asyncio.StreamReader, asyncio.StreamWriter] | None:
     try:
         # Open TCP connection
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(host=host, port=port.port_number),
-            timeout=1   # second
+            timeout=5   # second
         )
         return (reader, writer)
-    except:
+    except Exception as e:
         # Failed to open TCP connection
         return None
     
     
-async def read_welcome_banner(reader: asyncio.StreamReader) -> bytes | None:
-    """Wait for welcome banner (NULL Probe) (6s timeout)"""
+async def read_welcome_banner(reader: asyncio.StreamReader) -> str:
+    """
+    Wait and read welcome banner from TCP StreamReader (NULL Probe) (7s timeout)
+    and return decoded banner (string)
+    """
     chunks = []
     while True:
         try:
             chunk = await asyncio.wait_for(
                 reader.read(1024),
-                timeout=6    # seconds 
+                timeout=7    # seconds 
             )
         except:
             break
@@ -51,6 +54,28 @@ async def read_welcome_banner(reader: asyncio.StreamReader) -> bytes | None:
         chunks.append(chunk)
 
     if not chunks:
-        return None
+        return ""
 
-    return b"".join(chunks)
+    return (b"".join(chunks)).decode("utf-8")
+        
+
+async def read_tcp_response(reader: asyncio.StreamReader) -> str:
+    """
+    Read response from TCP StreamReader and decode the response
+    """
+    
+    chunks = []
+    while True:
+        try:
+            chunk = await reader.read(1024)
+        except:
+            break
+        
+        if not chunk:
+            break
+        chunks.append(chunk)
+
+    if not chunks:
+        return ""
+
+    return (b"".join(chunks)).decode("utf-8")

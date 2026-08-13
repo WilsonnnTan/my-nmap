@@ -1,6 +1,6 @@
-from scapy.all import IP, TCP, ICMP, send, UDP
+from scapy.all import IP, TCP, ICMP, send, UDP, RandShort
 from collections import defaultdict
-
+import random
 from utils.packet_sender import send_packets
 from utils.nmap_type import PortInfo, TCPFlag
 
@@ -19,7 +19,9 @@ def tcp_syn_scan(hosts: list[str], port_count=100) -> dict[str, list[PortInfo]]:
         # Build packets for all common ports
         packets = []
         for port in ports:
-            packets.append(IP(dst=host)/TCP(dport=port, flags="S"))
+            # use ephemeral ports 
+            # https://www.protocolports.org/en/blog/well-known-registered-dynamic-ports
+            packets.append(IP(dst=host)/TCP(sport=random.randint(49152, 65535), dport=port, flags="S"))
 
         # send packets
         answered_packets, unanswered_packets = send_packets(packets, is_tcp=True)
@@ -94,7 +96,7 @@ def udp_scan(hosts: list[str], port_count=100) -> dict[str, list[PortInfo]]:
         # Build packets for all common ports
         packets = []
         for port in ports:
-            packets.append(IP(dst=host)/UDP(dport=port))
+            packets.append(IP(dst=host)/UDP(sport=random.randint(49152, 65535), dport=port))
 
         # send packets
         answered_packets, unanswered_packets = send_packets(packets, is_tcp=False)

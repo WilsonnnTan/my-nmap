@@ -1,8 +1,8 @@
-from scapy.all import IP, TCP, ICMP, sr1, send, UDP, sndrcv, conf, AsyncSniffer
+from scapy.all import IP, UDP, RandShort, sr1
 from utils.nmap_type import Port, PortInfo, VersionInfo, ServiceProbe, Match, Probe
-from utils.packet_sender import open_tcp_connection, read_welcome_banner
+from utils.packet_sender import open_tcp_connection, read_welcome_banner, read_tcp_response
 from typing import Literal
-import re, pcre, time, asyncio, copy
+import re, pcre, asyncio, random
 
 
 # Probes Database File Format:
@@ -16,7 +16,7 @@ class ServiceScan:
         self.probes_tracker = None     # track self.probes by key index
         self.parse_probes_database()
         
-        self.semaphore = asyncio.Semaphore(100)
+        self.semaphore = asyncio.Semaphore(5)
 
     # ================================ Service Scanner =========================================    
     async def scan(self, host: str, ports: list[PortInfo]) -> list[PortInfo]:
@@ -73,33 +73,39 @@ class ServiceScan:
                                     self.send_recv_probe(
                                         host=host,
                                         port=port,
-                                        service=None,
                                         is_null_probe=True,
                                     )
                                     for port in tcp_ports
                                 )
                             )
         
-        # Update old TCP ports to hold unmatched or softmatched
-        unmatched_or_soft_matched_ports = []
+        # Track unmatched or softmatched TCP ports
+        unmatched_or_soft_matched_tcp_ports = []
         for port, null_probe_result in zip(tcp_ports, null_probe_results):
             if null_probe_result == "match" or null_probe_result == "failed_to_connect":
                 results.append(port)
             else:
-                unmatched_or_soft_matched_ports.append(port)
-        tcp_ports = unmatched_or_soft_matched_ports
+                unmatched_or_soft_matched_tcp_ports.append(port)
         
-        # --- Send the rest of the probes based on listed port / rarity ---
-        
-            
+        # --- Send the rest of the probes based on listed port / rarity / soft match ---
+        merged_ports = unmatched_or_soft_matched_tcp_ports + udp_ports
+        await asyncio.gather(
+            *(
+                self.send_recv_probe(
+                    host=host,
+                    port=port,
+                    is_null_probe=False,
+                )
+                for port in merged_ports
+            )
+        )
+        results.extend(merged_ports)
                         
         return results
-
 
     async def send_recv_probe(self,
                             host: str,
                             port: PortInfo,
-                            service: str | None, 
                             is_null_probe: bool,
                           ) -> Literal["match", "soft_match", "failed_to_connect", None]:
         """
@@ -108,8 +114,8 @@ class ServiceScan:
         Return: (match, <service_name>, <VersionInfo obj>)
         """
         async with self.semaphore:
-            if is_null_probe and (service or port.protocol == "UDP"):
-                print("It is not possible to have UDP NULL Probe or having service when listening to NULL Probe")
+            if is_null_probe and (port.service or port.protocol == "UDP"):
+                print("It is not possible to have UDP NULL Probe or having service state when listening to NULL Probe")
                 print(f"port: {port}")
                 return None
         
@@ -123,43 +129,125 @@ class ServiceScan:
                     port.state = "filtered"
                     return "failed_to_connect"
                 reader, writer = connection
+                port.state = "open"
                 
                 # --- Listen to NULL Probe packets for 6 secs ---
-                welcome_banner = await read_welcome_banner(reader)
+                welcome_banner_str = await read_welcome_banner(reader)
                 # Close Connection
                 writer.close()
-                # Decode from bytes to str
-                welcome_banner_str = welcome_banner.decode("utf-8") if welcome_banner else ""
                 
                 # --- Handle NULL Probe match and softmatch ---
                 probe = self.probes["NULL"]
-                # check match
-                for m in probe.match:
-                    flags = self.build_flags(m.option)
-                    match_pattern = pcre.compile(m.pattern, flags=flags)
-                    match = match_pattern.match(welcome_banner_str)
-                    if match:
-                        port.service = m.service
-                        port.version_info = self.resolve_version_info(m.version_info, match)
-                        return "match"
-                
-                # check softmatch
-                for sm in probe.soft_match:
-                    flags = self.build_flags(sm.option)
-                    soft_match_pattern = pcre.compile(sm.pattern, flags=flags)
-                    match = soft_match_pattern.match(welcome_banner_str)
-                    if match:
-                        port.service = sm.service
-                        port.version_info = self.resolve_version_info(sm.version_info, match)
-                        return "soft_match"
-                
-                return None
+                return self.check_match(probe=probe, port=port, response=welcome_banner_str)
+            # ========== Handle the rest of the probes =============
             else:
-                # handle the rest probes
-                pass
+                for probe_name, probe in self.probes.items():
+                    if probe.probe.protocol != port.protocol or probe_name == "NULL":
+                        continue
+                    
+                    if port.service:
+                        # handle soft matched port
+                        # search and send probe that recognize 'port.service' service
+                        is_found_service = False
+                        for m in probe.match:
+                            if port.service == m.service:
+                                is_found_service = True
+                                break
+                        
+                        # Probe response
+                        response = None
+
+                        # send probe with recognized service
+                        if is_found_service and port.protocol == "TCP":
+                            connection = await open_tcp_connection(host, port)
+                            if not connection:
+                                # Rejected/No response means port is closed/filtered
+                                # Use filtered to avoid complexity
+                                port.state = "filtered"
+                                return "failed_to_connect"
+                            reader, writer = connection
+                            port.state = "open"
+                            
+                            # Send probe data in bytearray
+                            writer.write(probe.probe.probe_string)
+                            await writer.drain()
+                            
+                            # match check on response
+                            response = await read_tcp_response(reader)
+                            writer.close()  # close TCP connection
+                        elif is_found_service and port.protocol == "UDP":
+                            packet = IP(dst=host)/UDP(sport=random.randint(49152, 65535), dport=port.port_number)
+                            answered = sr1(packet, timeout=2, verbose=False)
+                            if answered and answered.haslayer("UDP") and answered[UDP].payload:
+                                # match check on response
+                                response = bytes(answered[UDP].payload).decode("utf-8")
+    
+                        # match check on probe response
+                        if response:
+                            is_match = self.check_match(probe=probe, port=port, response=response)
+                            if is_match and is_match == "match":
+                                return "match"  # Stop sending probe if match found
+                    else:
+                        # Handle port with no match/softmatch
+                        if port in probe.ports and probe.rarity <= 7:
+                            # Probe response
+                            response = None
+                            if port.protocol == "TCP":
+                                connection = await open_tcp_connection(host, port)
+                                if not connection:
+                                    # Rejected/No response means port is closed/filtered
+                                    # Use filtered to avoid complexity
+                                    port.state = "filtered"
+                                    return "failed_to_connect"
+                                reader, writer = connection
+                                port.state = "open"
+                                
+                                # Send probe data in bytearray
+                                writer.write(probe.probe.probe_string)
+                                await writer.drain()
+                                
+                                # match check on response
+                                response = await read_tcp_response(reader)
+                                writer.close()  # close TCP connection
+                            elif port.protocol == "UDP":
+                                packet = IP(dst=host)/UDP(sport=RandShort(), dport=port.port_number)
+                                answered = sr1(packet, timeout=2, verbose=False)
+                                if answered and answered.haslayer("UDP") and answered[UDP].payload:
+                                    # match check on response
+                                    response = bytes(answered[UDP].payload).decode("utf-8")
+                            
+                            # match check on probe response
+                            if response:
+                                port.state = "open"
+                                is_match = self.check_match(probe=probe, port=port, response=response)
+                                if is_match and is_match == "match":
+                                    return "match"  # Stop sending probe if match found
                 
             return None
 
+    def check_match(self, probe: ServiceProbe, port: PortInfo, response: str) -> Literal['match', 'soft_match'] | None:
+        """match check on probe response"""
+        for m in probe.match:
+            flags = self.build_flags(m.option)
+            match_pattern = pcre.compile(m.pattern, flags=flags)
+            match = match_pattern.match(response)
+            if match:
+                port.service = m.service
+                port.version_info = self.resolve_version_info(m.version_info, match)
+                return "match"
+        
+        # check softmatch
+        for sm in probe.soft_match:
+            flags = self.build_flags(sm.option)
+            soft_match_pattern = pcre.compile(sm.pattern, flags=flags)
+            match = soft_match_pattern.match(response)
+            if match:
+                port.service = sm.service
+                port.version_info = self.resolve_version_info(sm.version_info, match)
+                return "soft_match"
+
+        return None
+    
     def build_flags(self, option: str):
         """build match option flags for regex"""
         flags = 0

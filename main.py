@@ -89,7 +89,9 @@ def output(scan_result: dict[str, list[PortInfo]]):
         should_print = []
         should_not_print = []
         for key, val in counter.items():
-            if val <= 7:
+            if key in ["filtered", "open | filtered", "closed"] and val <= 5:
+                should_print.append(key)
+            elif key == "open":
                 should_print.append(key)
             else:
                 should_not_print.append(key)
